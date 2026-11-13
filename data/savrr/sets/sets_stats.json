@@ -1,0 +1,99 @@
+{
+  "n": 2000,
+  "seed": 0,
+  "corruption_failures_skipped": 1,
+  "rates": {
+    "0": {
+      "n_corrupted": 0,
+      "frac_corrupted": 0.0,
+      "q_corrupted": {},
+      "q_all": {
+        "n": 2000,
+        "mean": 1.0,
+        "min": 1.0,
+        "p25": 1.0,
+        "median": 1.0,
+        "p75": 1.0,
+        "max": 1.0
+      },
+      "n_steps_corrupted_hist": {},
+      "kind_counts": {},
+      "clean_rows_with_q_lt_1": 0
+    },
+    "30": {
+      "n_corrupted": 600,
+      "frac_corrupted": 0.3,
+      "q_corrupted": {
+        "n": 600,
+        "mean": 0.5778,
+        "min": 0.1667,
+        "p25": 0.4688,
+        "median": 0.5879,
+        "p75": 0.7,
+        "max": 0.9146
+      },
+      "q_all": {
+        "n": 2000,
+        "mean": 0.8733,
+        "min": 0.1667,
+        "p25": 0.7447,
+        "median": 1.0,
+        "p75": 1.0,
+        "max": 1.0
+      },
+      "n_steps_corrupted_hist": {
+        "1": 345,
+        "2": 182,
+        "3": 46,
+        "4": 18,
+        "5": 6,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "kind_counts": {
+        "relative": 452,
+        "digit": 518
+      },
+      "clean_rows_with_q_lt_1": 0
+    },
+    "50": {
+      "n_corrupted": 1000,
+      "frac_corrupted": 0.5,
+      "q_corrupted": {
+        "n": 1000,
+        "mean": 0.5783,
+        "min": 0.125,
+        "p25": 0.4738,
+        "median": 0.5925,
+        "p75": 0.7005,
+        "max": 0.9146
+      },
+      "q_all": {
+        "n": 2000,
+        "mean": 0.7892,
+        "min": 0.125,
+        "p25": 0.5925,
+        "median": 1.0,
+        "p75": 1.0,
+        "max": 1.0
+      },
+      "n_steps_corrupted_hist": {
+        "1": 572,
+        "2": 296,
+        "3": 85,
+        "4": 30,
+        "5": 13,
+        "6": 2,
+        "7": 1,
+        "8": 1
+      },
+      "kind_counts": {
+        "relative": 789,
+        "digit": 842
+      },
+      "clean_rows_with_q_lt_1": 0
+    }
+  },
+  "nesting_verified": true
+}

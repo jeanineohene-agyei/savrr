@@ -1,0 +1,9 @@
+runs/
+tests/
+data/aqua_rat_raw/
+data/savrr/*
+!data/savrr/sets/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vscode/
