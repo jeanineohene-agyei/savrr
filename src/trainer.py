@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from contextlib import nullcontext
 
 from accelerate.utils import is_peft_model
+from transformers import TrainerCallback
 from trl.trainer.utils import empty_cache
 
 from opsd_trainer import OPSDTrainer
@@ -118,11 +119,29 @@ def mix_teacher_log_probs(lp_full, lp_ans, q):
     )
 
 
+class VLLMSyncOnResumeCallback(TrainerCallback):
+    """After resuming from a checkpoint, push the restored LoRA weights to vLLM once.
+
+    OPSD's GOLDVLLMSyncCallback only syncs every `vllm_sync_frequency` steps, so
+    without this the first rollouts after a resume would come from the base weights.
+    """
+
+    def __init__(self, trainer):
+        self.trainer = trainer
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if getattr(self.trainer, "use_vllm", False) and state.global_step > 0:
+            self.trainer._move_model_to_vllm()
+            self.trainer._last_vllm_sync_step = state.global_step
+
+
 class SAVRRTrainer(OPSDTrainer):
     _tag_names = ["trl", "opsd", "savrr"]
     _name = "SAVRR"
 
-    def __init__(self, *args, student_thinking=False, teacher_thinking=True, **kwargs):
+    def __init__(self, *args, student_thinking=False, teacher_thinking=True, pregenerate_full_step=True, **kwargs):
+        # [SAVRR-BATCHGEN] pregenerate_full_step: one vLLM call per optimizer step (see get_batch_samples)
+        self.pregenerate_full_step = pregenerate_full_step
         if kwargs.get("reason_first"):
             raise ValueError("reason_first is not supported by SAVRRTrainer")
         if kwargs.get("use_thinking_machines_loss"):
@@ -135,6 +154,46 @@ class SAVRRTrainer(OPSDTrainer):
                 teacher_thinking=teacher_thinking,
             )
         super().__init__(*args, student_thinking=student_thinking, teacher_thinking=teacher_thinking, **kwargs)
+        self.add_callback(VLLMSyncOnResumeCallback(self))
+
+    # ------------------------------------------------------------------ [SAVRR-OPTIMIZED]
+    # Batched rollout generation.
+    # Reduce vLLM calls from 16 to 1 per optimizer step, 
+    # Improving generation efficiency and reducing repeated waiting overhead.
+    def _can_pregenerate(self):
+        return (
+            self.pregenerate_full_step
+            and self.use_vllm
+            and self.vllm_mode == "colocate"
+            and not getattr(self, "vllm_enable_sleep_mode", False)
+            and getattr(self, "vllm_tensor_parallel_size", 1) == 1
+            and not self.reason_first
+            and self.processing_class.pad_token_id is not None
+        )
+
+    def get_batch_samples(self, epoch_iterator, num_batches, device):
+        batch_samples, num_items_in_batch = super().get_batch_samples(epoch_iterator, num_batches, device)
+        if len(batch_samples) > 1 and self._can_pregenerate():
+            self._pregenerate_completions(batch_samples)
+        return batch_samples, num_items_in_batch
+
+    def _pregenerate_completions(self, batch_samples):
+        pad_id = self.processing_class.pad_token_id
+        prompts = [b["student_prompts"] for b in batch_samples]
+        width = max(p.shape[1] for p in prompts)
+        # right-pad every micro-batch's prompts to a common width; the pad tokens are
+        # stripped again when OPSD decodes the prompts for vLLM
+        merged = torch.cat([F.pad(p, (0, width - p.shape[1]), value=pad_id) for p in prompts], dim=0)
+        self._last_vllm_completion_ids = None
+        self._generate_on_policy_outputs_vllm({"student_prompts": merged}, self.generation_config, pad_id)
+        completions = self._last_vllm_completion_ids
+        if completions is None or len(completions) != merged.shape[0]:
+            raise RuntimeError("batched generation returned an unexpected number of completions")
+        start = 0
+        for b in batch_samples:
+            n = b["student_prompts"].shape[0]
+            b["pregen_completion_ids"] = [list(c) for c in completions[start:start + n]]
+            start += n
 
     def _set_signature_columns_if_needed(self):
         # keep the raw columns the collator needs

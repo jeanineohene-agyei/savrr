@@ -20,6 +20,7 @@ from pathlib import Path
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from transformers.trainer_utils import get_last_checkpoint
 from trl import ModelConfig, ScriptArguments, TrlParser, get_kbit_device_map, get_peft_config, get_quantization_config
 from trl.experimental.gold import GOLDConfig
 
@@ -42,6 +43,9 @@ class SAVRRScriptArguments(ScriptArguments):
     student_thinking: bool = field(default=False)
     teacher_thinking: bool = field(default=True)
     presence_penalty: float = field(default=0.0)
+    # [SAVRR-OPTIMIZED]
+    pregenerate_full_step: bool = field(default=True, metadata={
+        "help": "generate the rollouts of a whole optimizer step in one vLLM call (same training, faster)"})
 
 
 def load_train_dataset(path, supervision, max_samples=None, seed=0):
@@ -135,8 +139,16 @@ def main():
         ema_decay=script_args.ema_decay,
         student_thinking=script_args.student_thinking,
         teacher_thinking=script_args.teacher_thinking,
+        pregenerate_full_step=script_args.pregenerate_full_step,  # [SAVRR-OPTIMIZED]
     )
-    trainer.train()
+    # resume: an explicit --resume_from_checkpoint wins; otherwise pick up the latest
+    # checkpoint-* in output_dir (so an interrupted run continues where it stopped)
+    resume = training_args.resume_from_checkpoint
+    if resume is None and os.path.isdir(training_args.output_dir):
+        resume = get_last_checkpoint(training_args.output_dir)
+    if resume and int(os.environ.get("LOCAL_RANK", "0")) == 0:
+        print(f"Resuming from {resume}")
+    trainer.train(resume_from_checkpoint=resume)
     trainer.save_model(training_args.output_dir)
 
 

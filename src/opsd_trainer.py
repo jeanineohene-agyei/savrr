@@ -895,7 +895,15 @@ class OPSDTrainer(SFTTrainer):
         # Start timing for vLLM generation
         start_time = time.time()
 
-        if self.vllm_mode == "server":
+        # [SAVRR-BATCHGEN] ORIGINAL LINE (kept for review, disabled):
+        # if self.vllm_mode == "server":
+        # [SAVRR-BATCHGEN] NEW: if SAVRRTrainer.get_batch_samples already generated the
+        # completions for the whole optimizer step (one vLLM call for all micro-batches),
+        # use this micro-batch's share instead of calling vLLM again.  Everything after
+        # this point (tokenizing, padding, masks, decoding) is unchanged.
+        if inputs.get("pregen_completion_ids") is not None:
+            completion_ids = inputs["pregen_completion_ids"]
+        elif self.vllm_mode == "server":
             all_prompts_text = gather_object(prompts_text_for_vllm)
             if self.accelerator.is_main_process:
                 completion_ids = self.vllm_client.generate(
@@ -966,6 +974,10 @@ class OPSDTrainer(SFTTrainer):
         else:
             raise ValueError(f"Unknown vllm_mode: {self.vllm_mode}")
 
+        # [SAVRR-BATCHGEN] NEW: keep the raw completion token ids (one list per prompt, in
+        # prompt order) so SAVRRTrainer.get_batch_samples can split a batched call per micro-batch.
+        self._last_vllm_completion_ids = completion_ids
+
         # Calculate and print vLLM generation statistics
         elapsed_time = time.time() - start_time
         total_completion_tokens = sum(len(ids) for ids in completion_ids)
@@ -995,6 +1007,8 @@ class OPSDTrainer(SFTTrainer):
         prompt_ids = prompt_tokenized.input_ids
 
         completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
+
+
         # Manually pad/truncate completions to max_completion_length length before using pad function
         padded_completion_ids_list = []
         for completion_tensor in completion_ids_tensors:
