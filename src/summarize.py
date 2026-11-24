@@ -1,4 +1,4 @@
-"""Write the performance report for ONE run, from the eval files in <run_dir>/eval/.
+"""Write the performance report for ONE run, from the eval files in <run_dir>/<eval_sub>/.
 
 Outputs (inside the run dir):
   summary.md    headline test accuracy, comparison with the base model, per-checkpoint table
@@ -40,10 +40,10 @@ def step_of(ckpt):
     return 0 if ckpt == "base" else math.inf if ckpt == "final" else int(ckpt.split("-")[1])
 
 
-def load(run_dir):
+def load(run_dir, sub):
     """{ckpt: {split: {"summary": ..., "results": ...}}}"""
     out = {}
-    for path in glob.glob(os.path.join(run_dir, "eval", "*__aqua_*_eval.json")):
+    for path in glob.glob(os.path.join(run_dir, sub, "*__aqua_*_eval.json")):
         m = re.match(r"(.+)__aqua_(validation|test)_eval\.json$", os.path.basename(path))
         with open(path) as f:
             out.setdefault(m.group(1), {})[m.group(2)] = json.load(f)
@@ -74,12 +74,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
     ap.add_argument("--base", default=None, help="run dir of the base-model eval, for comparison")
+    ap.add_argument("--eval_sub", default="eval_4096", help="eval folder inside the run dir")
     args = ap.parse_args()
     run = os.path.basename(os.path.normpath(args.run_dir))
-    evals = load(args.run_dir)
+    evals = load(args.run_dir, args.eval_sub)
     if not evals:
-        raise SystemExit(f"no eval files in {args.run_dir}/eval")
-    base = load(args.base).get("base") if args.base and os.path.isdir(args.base) else None
+        raise SystemExit(f"no eval files in {args.run_dir}/{args.eval_sub}")
+    base = load(args.base, args.eval_sub).get("base") if args.base and os.path.isdir(args.base) else None
     ckpts = sorted(evals, key=step_of)
     scored = [c for c in ckpts if "validation" in evals[c] and "test" in evals[c]]
     n = evals[scored[0]]["test"]["summary"]["n"]
@@ -87,7 +88,10 @@ def main():
     # ---- csv
     keys = [("val_sampled", "validation", "sampled_accuracy"), ("val_greedy", "validation", "greedy_accuracy"),
             ("test_sampled", "test", "sampled_accuracy"), ("test_greedy", "test", "greedy_accuracy"),
-            ("test_unparsed", "test", "unparsed")]
+            ("test_unparsed", "test", "unparsed"),
+            ("test_hit_limit", "test", "hit_limit"),
+            ("test_sampled_unparsed", "test", "sampled_unparsed"),
+            ("test_sampled_hit_limit", "test", "sampled_hit_limit")]
     with open(os.path.join(args.run_dir, "summary.csv"), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["checkpoint"] + [k for k, _, _ in keys])
@@ -101,7 +105,8 @@ def main():
     best = max(scored, key=lambda c: (get(evals[c], "validation", "sampled_accuracy"), step_of(c)))
     final = "final" if "final" in scored else scored[-1]
     lines = [f"# {run}", "", f"**{title}** — AQuA-RAT, {n} test problems.",
-             "Accuracy in %, ± = 95% CI. *Sampled* = mean over 4 samples at T=0.6; *greedy* = T=0.", "",
+             "Accuracy in %, ± = 95% CI. *Sampled* (primary) = mean over 4 samples at T=0.6; "
+             "*greedy* = T=0 (secondary: not reproducible between identical runs).", "",
              "| Model | Val sampled | Test sampled | Test greedy |", "|---|---|---|---|"]
     rows = [("base", base)] if base else []
     if run.startswith("base"):

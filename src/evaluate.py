@@ -74,7 +74,7 @@ def main():
                          "Omit to score the base model.")
     ap.add_argument("--data_dir", default=os.path.join(os.path.dirname(__file__), "../data/savrr/sets"))
     ap.add_argument("--split", nargs="+", default=["test"], choices=["test", "validation"])
-    ap.add_argument("--max_tokens", type=int, default=2048)
+    ap.add_argument("--max_tokens", type=int, default=4096)
     ap.add_argument("--n_samples", type=int, default=0, help="extra sampled generations per problem (0 = greedy only)")
     ap.add_argument("--temperature", type=float, default=0.6)
     ap.add_argument("--top_p", type=float, default=0.95)
@@ -139,19 +139,26 @@ def main():
             ok = pred == r["correct"]
             n_correct += ok
             n_unparsed += pred is None
-            rec = dict(id=r["id"], correct=r["correct"], pred=pred, is_correct=ok, response=text)
+            rec = dict(id=r["id"], correct=r["correct"], pred=pred, is_correct=ok, response=text,
+                       n_tokens=len(outs[i].outputs[0].token_ids), finish_reason=outs[i].outputs[0].finish_reason)
             if sampled is not None:
                 preds = [extract_letter(o.text, r["options"]) for o in sampled[i].outputs]
                 rec["sampled_preds"] = preds
+                rec["sampled_n_tokens"] = [len(o.token_ids) for o in sampled[i].outputs]
+                rec["sampled_finish_reasons"] = [o.finish_reason for o in sampled[i].outputs]
                 rec["sampled_acc"] = sum(p == r["correct"] for p in preds) / len(preds)
                 avg_n.append(rec["sampled_acc"])
             results.append(rec)
 
         summary = dict(base_model=args.base_model, checkpoint=str(ckpt) if ckpt else None, split=split,
-                       n=len(rows), greedy_accuracy=n_correct / len(rows), unparsed=n_unparsed)
+                       n=len(rows), greedy_accuracy=n_correct / len(rows), unparsed=n_unparsed,
+                       max_tokens=args.max_tokens,
+                       hit_limit=sum(r["finish_reason"] == "length" for r in results))
         if avg_n:
             summary["n_samples"] = args.n_samples
             summary["temperature"] = args.temperature
+            summary["sampled_unparsed"] = sum(p is None for r in results for p in r["sampled_preds"])
+            summary["sampled_hit_limit"] = sum(f == "length" for r in results for f in r["sampled_finish_reasons"])
             summary["sampled_accuracy"] = sum(avg_n) / len(avg_n)
         print(json.dumps(summary, indent=2))
         out = out_path(ckpt, split)

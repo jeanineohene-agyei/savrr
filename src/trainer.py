@@ -119,6 +119,29 @@ def mix_teacher_log_probs(lp_full, lp_ans, q):
     )
 
 
+def left_pad_prompts(prompt_ids, pad_id):
+    """Move each row's right padding to the left, so the prompt ends where the response starts."""
+    if pad_id is None:
+        return prompt_ids
+    # stable sort on "is a real token": pads first, real tokens keep their order
+    order = torch.argsort((prompt_ids != pad_id).int(), dim=1, stable=True)
+    return torch.gather(prompt_ids, 1, order)
+
+
+def build_model_inputs(prompt_ids, gen_ids, pad_id):
+    """Model inputs for [prompt | response] with no padding in between.
+
+    OPSD right-pads the prompts, which leaves pad tokens between a short prompt and its
+    response: the first response token is then predicted from a pad position, and the
+    positions of all later tokens are shifted.  Here the prompt padding goes to the left
+    and position ids count real tokens only.
+    """
+    ids = torch.cat([left_pad_prompts(prompt_ids, pad_id), gen_ids], dim=1)
+    mask = torch.ones_like(ids) if pad_id is None else (ids != pad_id).long()
+    position_ids = (mask.cumsum(dim=1) - 1).clamp(min=0)
+    return dict(input_ids=ids, attention_mask=mask, position_ids=position_ids)
+
+
 class VLLMSyncOnResumeCallback(TrainerCallback):
     """After resuming from a checkpoint, push the restored LoRA weights to vLLM once.
 
@@ -216,11 +239,7 @@ class SAVRRTrainer(OPSDTrainer):
     def _teacher_log_probs(self, model, prompts, gen_ids, rows):
         """Teacher log-probs over the generated tokens for the selected rows only."""
         prompt_len = prompts.shape[1]
-        ids = torch.cat([prompts[rows], gen_ids[rows]], dim=1)
-        mask = torch.ones_like(ids)
-        if self.processing_class.pad_token_id is not None:
-            mask[ids == self.processing_class.pad_token_id] = 0
-        out = model(input_ids=ids, attention_mask=mask)
+        out = model(**build_model_inputs(prompts[rows], gen_ids[rows], self.processing_class.pad_token_id))
         logits = out.logits[:, prompt_len - 1: -1, :]
         del out
         lp = F.log_softmax(logits.float() / self.temperature, dim=-1)
@@ -236,7 +255,8 @@ class SAVRRTrainer(OPSDTrainer):
         B, T = gen_ids.shape
 
         # === student ===
-        out_s = model(input_ids=inputs["student_input_ids"], attention_mask=inputs["student_attention_mask"])
+        out_s = model(**build_model_inputs(inputs["student_input_ids"][:, :student_prompt_len], gen_ids,
+                                           self.processing_class.pad_token_id))
         student_logits = out_s.logits[:, student_prompt_len - 1: -1, :]
         del out_s
 

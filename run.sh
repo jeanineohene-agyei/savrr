@@ -13,7 +13,7 @@
 #   runs/<method>_c<rate>_seed<seed>_<date>-<time>/
 #       checkpoint-*/  adapter_model.safetensors   the model
 #       train.log  eval.log                        logs
-#       eval/                                      per-checkpoint outputs (every response)
+#       eval_4096/                                 per-checkpoint outputs (every response, 4096-token limit)
 #       summary.md  summary.csv  curves.png        performance summary (written by eval)
 # Training first runs the unit tests in tests/ (if present) and stops if any fail.
 #
@@ -30,11 +30,13 @@ ENV_BIN="$(conda info --base 2>/dev/null || true)/envs/${CONDA_ENV:-opsd}/bin"
 
 GPUS=${GPUS:-0}
 SEED=${SEED:-42}
-BATCH=${BATCH:-2}           # per-GPU micro-batch
-VLLM_MEM=${VLLM_MEM:-0.2}   # fraction of GPU memory reserved for vLLM rollouts
+BATCH=${BATCH:-4}           # per-GPU micro-batch
+VLLM_MEM=${VLLM_MEM:-0.3}   # fraction of GPU memory reserved for vLLM rollouts
 MODEL=${MODEL:-Qwen/Qwen3-0.6B}
 NUM_GPUS=$(awk -F, '{print NF}' <<< "$GPUS")
 (( 32 % (BATCH * NUM_GPUS) == 0 )) || { echo "BATCH ($BATCH) x number of GPUs ($NUM_GPUS) must divide 32"; exit 1; }
+EVAL_TOKENS=${EVAL_TOKENS:-4096}   # response limit at eval; each limit has its own folder (old 2048 results: eval/)
+EVAL_SUB=eval_$EVAL_TOKENS
 BASE_DIR=runs/base_$(basename "$MODEL")
 export CUDA_VISIBLE_DEVICES=$GPUS TRL_EXPERIMENTAL_SILENCE=1
 mkdir -p runs
@@ -88,7 +90,7 @@ resume() {   # continue an interrupted run from its latest checkpoint-*; sets RU
         say "$RUN_DIR already finished training — nothing to resume"; return
     fi
     local last
-    last=$(ls -d "$RUN_DIR"/checkpoint-* 2>/dev/null | sort -t- -k2 -n | tail -1)
+    last=$(ls -d "$RUN_DIR"/checkpoint-* 2>/dev/null | sort -V | tail -1)
     run_tests
     say "resuming $run from ${last:-scratch (no checkpoint yet)}  (log: $RUN_DIR/train.log)"
     echo "===== resumed $(date '+%F %T') from ${last:-scratch} =====" >> "$RUN_DIR/train.log"
@@ -146,22 +148,22 @@ launch() {   # $1 method, $2 rate, $3 run name; output_dir = runs/$3 (src/train.
 # eval: score every checkpoint + final model on validation and test, then write the summary
 run_eval() {   # $1 = run dir ("$BASE_DIR" for the base model)
     local dir=${1%/} ckpts=()
-    mkdir -p "$dir/eval"
+    mkdir -p "$dir/$EVAL_SUB"
     if [ "$dir" != "$BASE_DIR" ]; then
         [ -f "$dir/adapter_model.safetensors" ] || { echo "$dir has no trained model"; exit 1; }
         # the summary compares against the base model, so make sure it has been scored
-        [ -f "$BASE_DIR/eval/base__aqua_test_eval.json" ] || run_eval "$BASE_DIR"
+        [ -f "$BASE_DIR/$EVAL_SUB/base__aqua_test_eval.json" ] || run_eval "$BASE_DIR"
         ln -sfn . "$dir/final"   # the final model lives in the run dir itself
         ckpts=(--checkpoint_dir "$dir"/checkpoint-* "$dir/final")
     fi
     say "evaluating $dir  (log: $dir/eval.log)"
     CUDA_VISIBLE_DEVICES=${GPUS%%,*} python src/evaluate.py \
         --base_model "$MODEL" "${ckpts[@]}" \
-        --split validation test --n_samples 4 --temperature 0.6 \
-        --output_dir "$dir/eval" --skip_existing \
+        --split validation test --n_samples 4 --temperature 0.6 --max_tokens "$EVAL_TOKENS" \
+        --output_dir "$dir/$EVAL_SUB" --skip_existing \
         >> "$dir/eval.log" 2>&1 \
         || { say "EVAL FAILED — see $dir/eval.log"; exit 1; }
-    python src/summarize.py "$dir" --base "$BASE_DIR" > /dev/null
+    python src/summarize.py "$dir" --base "$BASE_DIR" --eval_sub "$EVAL_SUB" > /dev/null
     say "done -> $dir/summary.md"
     awk '/^\| Model/,/^$/' "$dir/summary.md"; grep '^Best-val checkpoint' "$dir/summary.md" || true
 }

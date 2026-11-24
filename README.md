@@ -27,7 +27,7 @@ Methods: `opsd` (q = 1), `answer_only` (q = 0), `binary` (q = 1 iff no error fou
 runs/<method>_c<rate>_seed<seed>_<date>-<time>/
     summary.md  curves.png  summary.csv     performance summary (best-val checkpoint on test, vs. base model)
     train.log  eval.log
-    eval/                                   every model response, per checkpoint and split
+    eval_4096/                              every model response, per checkpoint and split (4096-token limit)
     checkpoint-*/  adapter_model.safetensors
 runs/base_Qwen3-0.6B/                       base-model reference (same files, no checkpoints)
 ```
@@ -44,5 +44,5 @@ runs/base_Qwen3-0.6B/                       base-model reference (same files, no
 | `src/train.py` | training entry point (`--supervision opsd\|answer_only\|binary\|savrr`) |
 | `src/evaluate.py` | AQuA accuracy (greedy + sampled) with vLLM |
 | `src/summarize.py` | writes a run's summary.md / curves.png (called by eval) |
-| `src/opsd_trainer.py`, `src/data_collator.py` | copied unchanged from the official OPSD repo |
+| `src/opsd_trainer.py`, `src/data_collator.py` | copied from the official OPSD repo (`opsd_trainer.py` has small edits marked `[SAVRR-BATCHGEN]`) |
 | `data/savrr/sets/` | `train_c{0,30,50}.jsonl`, `validation.jsonl`, `test.jsonl` (committed; `./run.sh data` rebuilds them identically) |
